@@ -1,6 +1,6 @@
 # Actionpackd Hello on WhatsApp
 
-A marketing chatbot for [Actionpackd](https://hello.actionpackd.com). Someone messages the Actionpackd number on WhatsApp. This service checks the signature, remembers the chat, and asks a Mistral agent (created in Mistral Studio) for the reply. The agent can save a lead, hand the chat to the team, or start the conversation over.
+A marketing chatbot for [Actionpackd](https://hello.actionpackd.com). Someone messages the Actionpackd number on WhatsApp. This service checks the signature, remembers the chat, and asks Google Gemini for the reply. The model can save a lead, hand the chat to the team, or start the conversation over.
 
 Messaging goes through the [Actionpackd Messaging API](https://dev.actionpackd.com/docs). Replies inside the 24-hour window are plain text, with choices written as short numbered lines. The opening menu and the team alert are WhatsApp templates, because that API sends text and templates only. The conversation code does not import WhatsApp types, so a Telegram or web adapter can be added beside `src/channels/whatsapp/`.
 
@@ -8,11 +8,11 @@ Messaging goes through the [Actionpackd Messaging API](https://dev.actionpackd.c
 
 1. `POST /webhooks/actionpackd` checks the signature and parses the inbound message.
 2. The event id is claimed in `processed_events`. A duplicate that already finished is ignored. If the database claim fails, the route returns 500 so Actionpackd can retry.
-3. The route answers **200** and keeps working after the response. Mistral is too slow to hold the webhook open.
+3. The route answers **200** and keeps working after the response. Gemini is too slow to hold the webhook open.
 4. The turn takes a per-phone lock, calls the agent (or a local command), stores the reply, then sends it.
-5. Sends use `Idempotency-Key` `{eventId}:{index}`. If a send throws, the event stays `processing` and the next delivery of that event resends the same payloads. It does not call Mistral again.
+5. Sends use `Idempotency-Key` `{eventId}:{index}`. If a send throws, the event stays `processing` and the next delivery of that event resends the same payloads. It does not call Gemini again.
 
-A greeting with no conversation yet (`hi`, `hello`, `hey`, `good morning`, `good afternoon`, `good evening`) sends the menu template and does not call Mistral. A reply of `1` through `5` while there is still no conversation is read as that line of the opening menu (Business Agents, Media Agents, Reminder Bot, Follow-Up Bot, Talk to the team). Any other first message starts a conversation. `start over`, `restart`, and `menu` drop the stored conversation id and send the menu again.
+A greeting with no stored history yet (`hi`, `hello`, `hey`, `good morning`, `good afternoon`, `good evening`) sends the menu template and does not call Gemini. A reply of `1` through `5` while there is still no history is read as that line of the opening menu (Business Agents, Media Agents, Reminder Bot, Follow-Up Bot, Talk to the team). Any other first message starts a conversation. `start over`, `restart`, and `menu` delete that phone's history and send the menu again.
 
 While `contacts.human_takeover` is true, messages from that customer are stored and not answered. The team number is not a customer chat. From that number, `BOT ON <phone>` clears the flag. Example: `BOT ON 919876543210`. Any other text from the team number gets those instructions back.
 
@@ -23,14 +23,14 @@ src/index.ts                     migrate, listen on 0.0.0.0:$PORT, drain turns o
 src/app.ts                       Fastify app, raw-body parser, /health, /ready
 src/config.ts                    env validation
 src/conversation/run-turn.ts     one inbound event, idempotent
-src/conversation/agent-loop.ts   Mistral turn, tool calls, fallback text
+src/conversation/agent-loop.ts   Gemini turn, tool calls, fallback text
 src/conversation/tools.ts        save_lead, handoff_to_team, start_over
-src/mistral/                     AgentClient plus the official SDK adapter
+src/gemini/                      AgentClient adapter for @google/genai
 src/channels/whatsapp/           signature, parser, Actionpackd client, route
 src/db/                          pg pool, SQL migration runner, queries
 migrations/001_init.sql          contacts, leads, processed_events
-agent/instructions.md            system prompt to paste into Mistral Studio
-agent/tools.json                 the three function tools, same JSON as the code
+migrations/002_messages.sql      chat history; drops mistral_conversation_id
+agent/instructions.md            system instruction, loaded at startup
 ```
 
 Postgres access is `pg` plus numbered SQL files. There is no ORM. Applied files are recorded in `schema_migrations`.
@@ -39,8 +39,8 @@ Postgres access is `pg` plus numbered SQL files. There is no ORM. Applied files 
 
 - Node.js 22 LTS (the Docker image is `node:22-bookworm-slim`)
 - Postgres 14 or newer (the compose file runs 16)
-- An Actionpackd API key, and a Mistral API key
-- A Mistral Studio agent (steps below). The server starts without a working agent, and answers with the fallback text if Mistral errors
+- An Actionpackd API key, and a Gemini API key from [Google AI Studio](https://aistudio.google.com/apikey)
+- `agent/instructions.md` in place. The server exits on startup if that file is missing, and answers with the fallback text if Gemini errors
 
 ## Setup
 
@@ -62,84 +62,17 @@ curl -s localhost:3000/ready
 
 Apply migrations without starting the server with `npm run migrate`.
 
-## Mistral Studio
+## Google Gemini
 
-Create a **new** agent in [Mistral Studio](https://console.mistral.ai) (La Plateforme). Do not reuse an agent id from another bot.
+Replies come from the Gemini API. There is no hosted agent to configure. On startup the server reads [`agent/instructions.md`](agent/instructions.md) and sends it as `systemInstruction` on every request, along with the three function declarations in `src/conversation/tools.ts` (`save_lead`, `handoff_to_team`, `start_over`). The server runs those functions itself and sends the results back. Fill the two TODO blocks under Knowledge before you rely on prices or the safety answer. Until those still say TODO, the prompt tells the model to hand that question to the team. Restart after you edit the file.
 
-1. Model: `mistral-medium-latest` is a reasonable default. Any function-calling chat model is fine.
-2. Instructions: paste the whole of [`agent/instructions.md`](agent/instructions.md). Fill the two TODO blocks under Knowledge before you rely on prices or the safety answer. Until those still say TODO, the prompt tells the agent to hand that question to the team.
-3. Tools: add three function tools. Paste [`agent/tools.json`](agent/tools.json) (the same JSON is below). If Studio has a "require confirmation" toggle for a tool, leave it off. This server executes `function.call` outputs itself and appends `function.result`. It does not send `tool_confirmations`.
-4. Copy the agent id into `MISTRAL_AGENT_ID`, and a La Plateforme API key into `MISTRAL_API_KEY`.
-5. Restart the server after changing env.
+1. Create a free API key at <https://aistudio.google.com/apikey> and put it in `GEMINI_API_KEY`.
+2. Leave `GEMINI_MODEL` at the default, `gemini-3.5-flash-lite`. That is the stable model id in the [Gemini 3.5 Flash Lite docs](https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite) (function calling is supported). On the AI Studio free tier, Flash Lite models are 15 requests per minute, 500 requests per day, and 250,000 tokens per minute. Regular Flash models on that same free tier are 5 requests per minute and 20 requests per day.
+3. Free-tier prompts and responses may be used by Google to improve its products. Do not send secrets in the chat. This project does not turn on billing.
 
-The server does not send the tool list on the API request. If the tools are missing on the agent, the model will not emit function calls, and leads will not be saved.
+Gemini does not store the chat. Each request replays about the last 20 user turns from the `messages` table (`GEMINI_HISTORY_TURNS`). The window is cut on a user-text turn, and a leading function response is dropped so a trimmed request does not open on an orphan tool result. `start over`, `restart`, `menu`, and the `start_over` tool delete that phone's rows. The lead row is kept.
 
-```json
-[
-  {
-    "type": "function",
-    "function": {
-      "name": "save_lead",
-      "description": "Save or update what this person has told you. Call this as soon as they share a name, a business type, what they need, whether they have a WhatsApp Business number, or any other useful detail. Omit fields you do not know. Do not invent values.",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "name": { "type": "string", "description": "Their name, if they gave one." },
-          "business_type": {
-            "type": "string",
-            "description": "What they run, in their words. Examples: B2C bakery, fleet workshop, clinic, salon, gym, real estate, distributor."
-          },
-          "need": {
-            "type": "string",
-            "description": "Which product they want, or a short description of the job. Examples: Follow-Up Bot, Reminder Bot, Business Agents, Media Agents, plans and price."
-          },
-          "has_whatsapp_business_number": {
-            "type": "boolean",
-            "description": "True when they already have a WhatsApp Business number, false when they say they do not."
-          },
-          "notes": {
-            "type": "string",
-            "description": "Anything else the team should know. Do not repeat the other fields."
-          }
-        },
-        "additionalProperties": false
-      }
-    }
-  },
-  {
-    "type": "function",
-    "function": {
-      "name": "handoff_to_team",
-      "description": "Hand this chat to the Actionpackd team. Call this when they ask to talk to the team, a person, sales, or support, or when you cannot answer from the knowledge section. summary is a short brief: who they are, the business, what they want, and the details they gave. After this returns, tell them the team has it. Do not ask a follow-up question. The bot stops replying to them until the team turns it back on.",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "summary": {
-            "type": "string",
-            "description": "Brief for the team. One to four sentences. No phone number; the app adds that."
-          }
-        },
-        "required": ["summary"],
-        "additionalProperties": false
-      }
-    }
-  },
-  {
-    "type": "function",
-    "function": {
-      "name": "start_over",
-      "description": "Forget the current conversation. Call this when they want to start again, restart, or go back to the main menu. The next message they send starts a fresh chat. Confirm briefly and offer the five opening choices as a numbered list.",
-      "parameters": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      }
-    }
-  }
-]
-```
-
-`save_lead` upserts `leads` by the sender's phone. Omitted fields keep their previous values. `handoff_to_team` sends the team alert and sets `contacts.human_takeover`. `start_over` drops `contacts.mistral_conversation_id` after that turn's tool results have been appended. The lead row is kept.
+`save_lead` upserts `leads` by the sender's phone. Omitted fields keep their previous values. `handoff_to_team` sends the team alert and sets `contacts.human_takeover`.
 
 ## Templates to approve
 
@@ -211,9 +144,9 @@ Replace `TODO_hello_team_alert` in `src/conversation/templates.ts` once the name
 | `ACTIONPACKD_API_KEY`        | yes      | `apk_live_...` or `apk_test_...` bearer key                                 |
 | `ACTIONPACKD_WEBHOOK_SECRET` | yes      | HMAC secret from `PUT /v1/webhook`                                          |
 | `ACTIONPACKD_BASE_URL`       | no       | Defaults to `https://api.actionpackd.com/v1`                                |
-| `MISTRAL_API_KEY`            | yes      | La Plateforme API key                                                       |
-| `MISTRAL_AGENT_ID`           | yes      | Agent id from Studio                                                        |
-| `MISTRAL_BASE_URL`           | no       | SDK origin. Defaults to `https://api.mistral.ai`. Do not append `/v1`       |
+| `GEMINI_API_KEY`             | yes      | API key from [Google AI Studio](https://aistudio.google.com/apikey)         |
+| `GEMINI_MODEL`               | no       | Defaults to `gemini-3.5-flash-lite`                                         |
+| `GEMINI_HISTORY_TURNS`       | no       | User turns replayed per request. Defaults to `20`                           |
 | `TEAM_WHATSAPP_NUMBER`       | yes      | Number that receives handoff alerts and can send `BOT ON`. Stored as digits |
 | `PORT`                       | no       | Defaults to `3000`. Railway sets this                                       |
 | `NODE_ENV`                   | no       | `development` (default), `test`, or `production`                            |
@@ -223,12 +156,12 @@ A Railway **public** database URL should keep `sslmode=require`. The pool turns 
 
 `apk_test_` keys are a sandbox: Actionpackd validates the send and can call your webhook, and nothing is delivered on WhatsApp. `apk_live_` sends on the connected number.
 
-Each Mistral request times out after 20 seconds. SDK retries are off, so a timeout or HTTP error becomes the fallback reply instead of a long retry. At most three rounds of tool results are appended for one user message.
+Each Gemini request times out after 20 seconds. SDK retries are off (`retryOptions.attempts` is 1, which is the original request and no follow-up), so a timeout or HTTP error becomes the fallback reply instead of a long retry. HTTP 429 is the exception: the customer gets a short note to try again in a minute, the error is logged, and the request is not retried. At most three rounds of tool results are sent for one user message.
 
 ## Scripts
 
 ```bash
-npm test          # unit tests, no Postgres and no calls to Actionpackd or Mistral
+npm test          # unit tests, no Postgres and no calls to Actionpackd or Gemini
 npm run lint
 npm run format:check
 npm run typecheck
@@ -339,30 +272,30 @@ The assumed inbound envelope is:
 
 A template button is read from `button.payload` / `button.text` (and from an interactive reply). The button title is what the agent sees. `type: "message.status"` is stored and not turned into a conversation turn. A Meta Cloud API `entry[].changes[].value.messages[]` wrapper is also accepted. The public docs do not publish this JSON. Compare it with one real delivery before relying on it.
 
-Photos, voice notes, and other non-text messages get a short note asking for text. They are not passed to Mistral.
+Photos, voice notes, and other non-text messages get a short note asking for text. They are not passed to Gemini.
 
 ## Tables
 
-`contacts.phone` is the WhatsApp sender, digits only. `mistral_conversation_id` is the id returned by the last Conversations API call. `human_takeover` stops the bot. `last_inbound_at` is updated on each customer message.
+`contacts.phone` is the WhatsApp sender, digits only. `human_takeover` stops the bot. `last_inbound_at` is updated on each customer message. Migration `002_messages.sql` drops `mistral_conversation_id` from the original contacts table.
 
 `leads` is one row per phone: `name`, `business_type`, `need`, `has_whatsapp_business_number`, `notes`.
 
-`processed_events.deliveries` is a JSON array of `{ channel, to, reply }`. `status` moves from `processing` to `processed` only after every send has succeeded.
+`messages` is the Gemini transcript for one phone: `role` (`user` or `model`), `parts` (a JSON array of text, function calls, function responses, and thought signatures), and `created_at`. The index is `(phone, created_at, id)`. `start over`, `restart`, `menu`, and the `start_over` tool delete that phone's rows.
 
-## Mistral API assumptions
+`processed_events.deliveries` is a JSON array of `{ channel, to, reply }`. `status` moves from `processing` to `processed` only after every send has succeeded. History is written in the same transaction as those deliveries, so a retry resends without calling Gemini or appending the turn twice.
 
-Checked against the Agents and Conversations docs on docs.mistral.ai, the Studio function-calling guide, and `@mistralai/mistralai` 3.2.0 type definitions (24 Oct 2026). Not called with a live API key in this repo.
+## Gemini API assumptions
 
-- Start a conversation with `client.beta.conversations.start({ agentId, inputs, store: true })`, which is `POST /v1/conversations`.
-- Continue with `client.beta.conversations.append({ conversationId, conversationAppendRequest: { inputs, store: true } })`, which is `POST /v1/conversations/{conversation_id}`.
-- The docs say an append returns a conversation id. This server stores whatever `conversation_id` came back, unless `start_over` cleared it.
-- A function call is an output with `type: "function.call"`, `name`, `arguments` (object or JSON string), and `tool_call_id`. The result is appended as `{ type: "function.result", tool_call_id, result }` where `result` is a JSON string. That matches the Studio guide's `FunctionResultEntry`.
-- Assistant text is `type: "message.output"`. Chunks with `type: "think"` are dropped. Built-in tool executions (`web_search` and similar) are ignored. If you add those on the agent, their text still has to arrive as a message for us to forward it.
-- A 404 on appending a **user** message starts a new conversation once. A 404 on appending **tool results** drops the stored id and the user gets the fallback text. The SDK's `statusCode` is what we treat as 404. The live error body was not verified.
-- `handoff_execution` is left at the API default (`server`). That flag is for agent-to-agent handoffs, not for `handoff_to_team`.
-- Pending tool confirmation (`confirmation_status: "pending"`) is not handled. Turn confirmation off in Studio. If a live call stalls on a pending tool, that is why.
+Checked against the Gemini API docs (function calling, thought signatures, and the `gemini-3.5-flash-lite` model page) and `@google/genai` 2.31.0 type definitions (24 Oct 2026). Not called with a live API key in this repo.
+
+- `new GoogleGenAI({ apiKey })`, then `ai.models.generateContent({ model, contents, config })`.
+- `config.systemInstruction` is the instructions file. `config.tools` is `[{ functionDeclarations }]`, using `parametersJsonSchema` from `src/conversation/tools.ts`. Automatic function calling is disabled (`automaticFunctionCalling: { disable: true }`) so this process runs the tools. `automaticContinuation` is off.
+- `config.httpOptions.timeout` is milliseconds (20_000). `retryOptions.attempts: 1` means the original request and zero retries. In SDK 2.31.0, `attempts` includes the first call (`retries: attempts - 1`). The default, when `retryOptions` is omitted, is also a single try; setting it makes that explicit because a retry policy includes HTTP 429.
+- A non-OK HTTP response throws `ApiError` with `status` set to the HTTP code (SDK source `throwErrorIfNotOK`). Status 429 becomes a quota reply. The live error JSON was not verified.
+- History contents use roles `user` and `model`. A function response is a user part `{ functionResponse: { name, id, response } }`. Success is sent as `{ output }` and a failed tool as `{ error }`, which is what the function-calling docs describe.
+- The model part is stored as returned, including `thoughtSignature`. Gemini 3 requires that signature on the current turn's function calls. The reader copies the property even when it is a getter, which is how the SDK exposes it. A live response was not available to confirm the signature is present on `candidates[0].content.parts`.
 - A crash after the 200 and before the deliveries are saved will not be retried by Actionpackd, because the webhook already succeeded. A later duplicate of that event id still resumes an event left in `processing`.
 
 ## What this demo does not do
 
-It does not download WhatsApp media, take payment, or quote a price. Pricing and the safety answer belong in the Knowledge section of `agent/instructions.md`. Adding Telegram means a new adapter and a migration that widens the `channel` check constraint. The core already talks to an `AgentClient` and a `ChannelAdapter` rather than to WhatsApp or Mistral directly.
+It does not download WhatsApp media, take payment, or quote a price. Pricing and the safety answer belong in the Knowledge section of `agent/instructions.md`. Adding Telegram means a new adapter and a migration that widens the `channel` check constraint. The core already talks to an `AgentClient` and a `ChannelAdapter` rather than to WhatsApp or Gemini directly.

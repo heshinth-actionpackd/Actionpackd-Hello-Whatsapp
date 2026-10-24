@@ -1,12 +1,13 @@
+import type { AgentClient } from "../agent/types.js";
 import type { Contact, Delivery, InboundMessage, Lead } from "../domain.js";
 import { blankLead } from "../domain.js";
 import type { Log } from "../log.js";
 import { silentLog } from "../log.js";
-import type { AgentClient } from "../mistral/types.js";
 import type { HelloStore } from "../store.js";
 import { runAgentTurn } from "./agent-loop.js";
 import { isGreeting, isResetCommand, openingChoice, parseBotOn, userText } from "./commands.js";
 import { NON_TEXT_REPLY, TEAM_HELP, teamResumed, teamUnknownContact } from "./copy.js";
+import type { HistoryMessage } from "./history.js";
 import { menuReply, teamAlertReply } from "./templates.js";
 
 export interface TurnDeps {
@@ -20,6 +21,12 @@ interface Plan {
   contacts: Contact[];
   lead: Lead | null;
   deliveries: Delivery[];
+  /** When clear is set, this phone's history is deleted and `messages` is ignored. */
+  history: { clear: boolean; messages: HistoryMessage[] };
+}
+
+function keepHistory(): Plan["history"] {
+  return { clear: false, messages: [] };
 }
 
 /**
@@ -41,7 +48,7 @@ export async function acceptInbound(
 /**
  * Runs one inbound message while holding the per-phone lock: plan, persist,
  * send, then mark the event processed. A second delivery of the same event
- * resends the saved deliveries and does not call Mistral again.
+ * resends the saved deliveries and does not call Gemini again.
  */
 export async function runTurn(
   deps: TurnDeps,
@@ -77,6 +84,10 @@ export async function runTurn(
     await deps.store.transact(async (tx) => {
       for (const contact of plan.contacts) await tx.saveContact(contact);
       if (plan.lead) await tx.saveLead(plan.lead);
+      if (plan.history.clear) await tx.clearMessages(phone);
+      else if (plan.history.messages.length > 0) {
+        await tx.appendMessages(phone, plan.history.messages);
+      }
       await tx.saveEventDeliveries(message.eventId, plan.deliveries);
     });
 
@@ -106,7 +117,6 @@ async function planTurn(
   const contact: Contact = existing ?? {
     phone,
     channel: message.channel,
-    mistralConversationId: null,
     humanTakeover: false,
     lastInboundAt: null,
   };
@@ -114,7 +124,7 @@ async function planTurn(
 
   if (contact.humanTakeover) {
     log.info({ eventId: message.eventId }, "ignored inbound during human takeover");
-    return { contacts: [contact], lead: null, deliveries: [] };
+    return { contacts: [contact], lead: null, deliveries: [], history: keepHistory() };
   }
 
   if (!text) {
@@ -122,27 +132,37 @@ async function planTurn(
       contacts: [contact],
       lead: null,
       deliveries: [textDelivery(message, phone, NON_TEXT_REPLY)],
+      history: keepHistory(),
     };
   }
 
   if (isResetCommand(text)) {
-    contact.mistralConversationId = null;
-    return { contacts: [contact], lead: null, deliveries: [menuDelivery(message, phone)] };
+    return {
+      contacts: [contact],
+      lead: null,
+      deliveries: [menuDelivery(message, phone)],
+      history: { clear: true, messages: [] },
+    };
   }
 
-  if (!contact.mistralConversationId && isGreeting(text)) {
-    return { contacts: [contact], lead: null, deliveries: [menuDelivery(message, phone)] };
+  const hasHistory = await deps.store.transact((tx) => tx.hasMessages(phone));
+  if (!hasHistory && isGreeting(text)) {
+    return {
+      contacts: [contact],
+      lead: null,
+      deliveries: [menuDelivery(message, phone)],
+      history: keepHistory(),
+    };
   }
 
-  const choice = contact.mistralConversationId ? null : openingChoice(text);
+  const choice = hasHistory ? null : openingChoice(text);
   const turn = await runAgentTurn({
     agent: deps.agent,
-    conversationId: contact.mistralConversationId,
+    phone,
     userText: choice ?? text,
     lead,
     log,
   });
-  contact.mistralConversationId = turn.conversationId;
   if (turn.humanTakeover) contact.humanTakeover = true;
 
   const deliveries: Delivery[] = [textDelivery(message, phone, turn.text)];
@@ -153,7 +173,14 @@ async function planTurn(
       reply: teamAlertReply(phone, turn.teamSummary),
     });
   }
-  return { contacts: [contact], lead: turn.lead, deliveries };
+  return {
+    contacts: [contact],
+    lead: turn.lead,
+    deliveries,
+    history: turn.resetConversation
+      ? { clear: true, messages: [] }
+      : { clear: false, messages: turn.messages },
+  };
 }
 
 async function teamPlan(
@@ -168,6 +195,7 @@ async function teamPlan(
       contacts: [],
       lead: null,
       deliveries: [textDelivery(message, phone, TEAM_HELP)],
+      history: keepHistory(),
     };
   }
 
@@ -177,6 +205,7 @@ async function teamPlan(
       contacts: [],
       lead: null,
       deliveries: [textDelivery(message, phone, teamUnknownContact(target))],
+      history: keepHistory(),
     };
   }
 
@@ -185,6 +214,7 @@ async function teamPlan(
     contacts: [customer],
     lead: null,
     deliveries: [textDelivery(message, phone, teamResumed(target))],
+    history: keepHistory(),
   };
 }
 

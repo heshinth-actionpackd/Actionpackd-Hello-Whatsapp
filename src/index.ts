@@ -7,8 +7,9 @@ import { loadConfig } from "./config.js";
 import { migrate, migrationsDir } from "./db/migrate.js";
 import { createPool } from "./db/pool.js";
 import { createPgStore } from "./db/pg-store.js";
+import { createGeminiAgentClient } from "./gemini/client.js";
+import { loadSystemInstruction } from "./gemini/instructions.js";
 import { loggerOptions } from "./logger.js";
-import { createMistralAgentClient } from "./mistral/sdk.js";
 
 const config = loadConfig();
 const pool = createPool(config);
@@ -34,10 +35,21 @@ const channels = new ChannelRegistry([
   ),
 ]);
 
-const agent = createMistralAgentClient({
-  apiKey: config.MISTRAL_API_KEY,
-  agentId: config.MISTRAL_AGENT_ID,
-  ...(config.MISTRAL_BASE_URL ? { baseUrl: config.MISTRAL_BASE_URL } : {}),
+let systemInstruction: string;
+try {
+  systemInstruction = loadSystemInstruction();
+} catch (error) {
+  console.error("Could not load agent/instructions.md", error);
+  await pool.end();
+  process.exit(1);
+}
+
+const agent = createGeminiAgentClient({
+  apiKey: config.GEMINI_API_KEY,
+  model: config.GEMINI_MODEL,
+  systemInstruction,
+  store,
+  historyTurns: config.GEMINI_HISTORY_TURNS,
 });
 
 const app = await buildApp({

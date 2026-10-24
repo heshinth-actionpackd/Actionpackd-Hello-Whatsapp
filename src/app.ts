@@ -3,7 +3,7 @@ import type { ChannelRegistry } from "./channels/registry.js";
 import { registerWhatsappWebhook } from "./channels/whatsapp/routes.js";
 import type { AppConfig } from "./config.js";
 import { InFlight } from "./inflight.js";
-import type { AgentClient } from "./mistral/types.js";
+import type { AgentClient } from "./agent/types.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import type { HelloStore } from "./store.js";
 

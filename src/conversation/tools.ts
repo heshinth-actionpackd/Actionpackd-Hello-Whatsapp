@@ -2,10 +2,10 @@ import { z } from "zod";
 import { type Lead } from "../domain.js";
 
 /**
- * JSON the user pastes into Mistral Studio. Keep agent/tools.json identical;
- * test/tools-schema.test.ts checks the file against this export.
+ * Function tools sent to Gemini on every request. `functionDeclarations()`
+ * is the shape `@google/genai` expects (`parametersJsonSchema`).
  */
-export const STUDIO_TOOLS = [
+export const FUNCTION_TOOLS = [
   {
     type: "function",
     function: {
@@ -77,6 +77,18 @@ export const STUDIO_TOOLS = [
     },
   },
 ] as const;
+
+export function functionDeclarations(): {
+  name: string;
+  description: string;
+  parametersJsonSchema: unknown;
+}[] {
+  return FUNCTION_TOOLS.map((tool) => ({
+    name: tool.function.name,
+    description: tool.function.description,
+    parametersJsonSchema: tool.function.parameters,
+  }));
+}
 
 const optionalText = (max: number) =>
   z.preprocess(

@@ -1,10 +1,17 @@
+import type { HistoryMessage } from "../src/conversation/history.js";
 import type { ChannelId, Contact, Delivery, Lead, Reply, StoredEvent } from "../src/domain.js";
 import type { BeginEventResult, HelloStore, HelloTx } from "../src/store.js";
+
+interface StoredMessage {
+  phone: string;
+  message: HistoryMessage;
+}
 
 interface Snapshot {
   contacts: Map<string, Contact>;
   leads: Map<string, Lead>;
   events: Map<string, StoredEvent>;
+  messages: StoredMessage[];
   contactWrites: number;
 }
 
@@ -13,6 +20,7 @@ export class MemoryStore implements HelloStore, HelloTx {
   contacts = new Map<string, Contact>();
   leads = new Map<string, Lead>();
   events = new Map<string, StoredEvent>();
+  messages: StoredMessage[] = [];
   contactWrites = 0;
   /** When set, the next transact() throws once. Used to simulate a database outage. */
   failTransact = false;
@@ -90,6 +98,32 @@ export class MemoryStore implements HelloStore, HelloTx {
     this.leads.set(lead.phone, { ...lead });
   }
 
+  async listMessages(phone: string, limit: number): Promise<HistoryMessage[]> {
+    if (limit < 1) return [];
+    return this.messages
+      .filter((row) => row.phone === phone)
+      .slice(-limit)
+      .map((row) => cloneMessage(row.message));
+  }
+
+  async hasMessages(phone: string): Promise<boolean> {
+    return this.messages.some((row) => row.phone === phone);
+  }
+
+  async appendMessages(phone: string, messages: HistoryMessage[]): Promise<void> {
+    for (const message of messages) {
+      if (message.role !== "user" && message.role !== "model") {
+        throw new Error(`unexpected message role ${message.role}`);
+      }
+      if (!Array.isArray(message.parts)) throw new Error("message parts must be an array");
+      this.messages.push({ phone, message: cloneMessage(message) });
+    }
+  }
+
+  async clearMessages(phone: string): Promise<void> {
+    this.messages = this.messages.filter((row) => row.phone !== phone);
+  }
+
   async markEventProcessed(eventId: string): Promise<void> {
     const event = this.events.get(eventId);
     if (!event) return;
@@ -101,6 +135,10 @@ export class MemoryStore implements HelloStore, HelloTx {
       contacts: new Map([...this.contacts].map(([key, contact]) => [key, { ...contact }])),
       leads: new Map([...this.leads].map(([key, lead]) => [key, { ...lead }])),
       events: new Map([...this.events].map(([key, event]) => [key, cloneEvent(event)])),
+      messages: this.messages.map((row) => ({
+        phone: row.phone,
+        message: cloneMessage(row.message),
+      })),
       contactWrites: this.contactWrites,
     };
   }
@@ -109,8 +147,16 @@ export class MemoryStore implements HelloStore, HelloTx {
     this.contacts = snapshot.contacts;
     this.leads = snapshot.leads;
     this.events = snapshot.events;
+    this.messages = snapshot.messages;
     this.contactWrites = snapshot.contactWrites;
   }
+}
+
+function cloneMessage(message: HistoryMessage): HistoryMessage {
+  return {
+    role: message.role,
+    parts: JSON.parse(JSON.stringify(message.parts)) as unknown[],
+  };
 }
 
 function cloneEvent(event: StoredEvent): StoredEvent {

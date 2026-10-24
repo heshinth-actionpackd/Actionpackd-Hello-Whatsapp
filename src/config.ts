@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { DEFAULT_HISTORY_TURNS } from "./conversation/history.js";
+import { DEFAULT_GEMINI_MODEL } from "./gemini/constants.js";
 
 const emptyToUndefined = (value: unknown) =>
   typeof value === "string" && value.trim() === "" ? undefined : value;
@@ -19,9 +21,12 @@ const schema = z.object({
   ACTIONPACKD_API_KEY: z.string().min(1),
   ACTIONPACKD_WEBHOOK_SECRET: z.string().min(1),
   ACTIONPACKD_BASE_URL: z.string().url().default("https://api.actionpackd.com/v1"),
-  MISTRAL_API_KEY: z.string().min(1),
-  MISTRAL_AGENT_ID: z.string().min(1),
-  MISTRAL_BASE_URL: z.preprocess(emptyToUndefined, z.string().url().optional()),
+  GEMINI_API_KEY: z.string().min(1),
+  GEMINI_MODEL: z.preprocess(emptyToUndefined, z.string().min(1).default(DEFAULT_GEMINI_MODEL)),
+  GEMINI_HISTORY_TURNS: z.preprocess(
+    emptyToUndefined,
+    z.coerce.number().int().positive().max(200).default(DEFAULT_HISTORY_TURNS),
+  ),
   TEAM_WHATSAPP_NUMBER: phoneDigits,
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
 });

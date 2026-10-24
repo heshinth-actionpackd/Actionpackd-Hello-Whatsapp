@@ -5,7 +5,7 @@ import type { AppConfig } from "../../config.js";
 import { acceptInbound, runTurn } from "../../conversation/run-turn.js";
 import type { InFlight } from "../../inflight.js";
 import type { Log } from "../../log.js";
-import type { AgentClient } from "../../mistral/types.js";
+import type { AgentClient } from "../../agent/types.js";
 import type { HelloStore } from "../../store.js";
 import { ActionpackdError } from "./client.js";
 import { parseActionpackdWebhook } from "./parse.js";

@@ -2,7 +2,7 @@
   "name": "actionpackd-hello-whatsapp",
   "version": "0.1.0",
   "private": true,
-  "description": "Actionpackd Hello on WhatsApp. A marketing chatbot via the Actionpackd Messaging API, with replies from a Mistral agent.",
+  "description": "Actionpackd Hello on WhatsApp. A marketing chatbot via the Actionpackd Messaging API, with replies from Google Gemini.",
   "type": "module",
   "engines": {
     "node": ">=22"
@@ -19,7 +19,7 @@
     "migrate": "tsx src/db/migrate.ts"
   },
   "dependencies": {
-    "@mistralai/mistralai": "3.2.0",
+    "@google/genai": "2.31.0",
     "dotenv": "^18.0.9",
     "fastify": "^5.12.7",
     "pg": "^8.23.1",
