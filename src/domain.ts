@@ -26,7 +26,6 @@ export interface InboundMessage {
 export interface Contact {
   phone: string;
   channel: ChannelId;
-  mistralConversationId: string | null;
   humanTakeover: boolean;
   lastInboundAt: string | null;
 }

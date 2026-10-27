@@ -9,9 +9,9 @@ export const testConfig: AppConfig = {
   ACTIONPACKD_API_KEY: "apk_test_unit",
   ACTIONPACKD_WEBHOOK_SECRET: "test-secret",
   ACTIONPACKD_BASE_URL: "https://api.actionpackd.com/v1",
-  MISTRAL_API_KEY: "test-mistral",
-  MISTRAL_AGENT_ID: "ag_test",
-  MISTRAL_BASE_URL: undefined,
+  GEMINI_API_KEY: "test-gemini",
+  GEMINI_MODEL: "gemini-3.5-flash-lite",
+  GEMINI_HISTORY_TURNS: 20,
   TEAM_WHATSAPP_NUMBER: "919800000000",
   LOG_LEVEL: "silent",
 };

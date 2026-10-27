@@ -1,4 +1,4 @@
-/** Shown when Mistral errors, times out, or returns nothing we can send. */
+/** Shown when Gemini errors, times out, or returns nothing we can send. */
 export const FALLBACK_TEXT = [
   "Sorry, I couldn't finish that just now. Send it again in a moment, or pick one:",
   "1. Business Agents",
@@ -19,6 +19,10 @@ export const MENU_TEXT = [
   "4. Follow-Up Bot",
   "5. Talk to the team",
 ].join("\n");
+
+/** HTTP 429. One reply, no retry loop. */
+export const QUOTA_TEXT =
+  "We're getting a lot of messages right now. Please try again in a minute.";
 
 export const NON_TEXT_REPLY =
   "I can read text in this chat. Tell me what you need, or send MENU to see the options.";

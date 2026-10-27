@@ -35,8 +35,8 @@ export function isGreeting(text: string): boolean {
 }
 
 /**
- * A bare "1" to "5" answers the opening menu. Only use this when there is no
- * Mistral conversation yet, so a later numbered list stays the agent's to read.
+ * A bare "1" to "5" answers the opening menu. Only use this when this phone
+ * has no stored history yet, so a later numbered list stays the model's to read.
  */
 export function openingChoice(text: string): string | null {
   const match = /^\s*([1-5])\s*[.)]?\s*$/.exec(text);

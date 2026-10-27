@@ -1,4 +1,5 @@
 import type { Pool, PoolClient } from "pg";
+import type { HistoryMessage } from "../conversation/history.js";
 import {
   isChannelId,
   type ChannelId,
@@ -13,7 +14,6 @@ import type { BeginEventResult, HelloStore, HelloTx } from "../store.js";
 interface ContactRow {
   phone: string;
   channel: string;
-  mistral_conversation_id: string | null;
   human_takeover: boolean;
   last_inbound_at: Date | null;
 }
@@ -32,6 +32,11 @@ interface EventRow {
   channel: string;
   status: string;
   deliveries: unknown;
+}
+
+interface MessageRow {
+  role: string;
+  parts: unknown;
 }
 
 class PgTx implements HelloTx {
@@ -69,7 +74,7 @@ class PgTx implements HelloTx {
 
   async getContact(phone: string): Promise<Contact | null> {
     const result = await this.client.query<ContactRow>(
-      `SELECT phone, channel, mistral_conversation_id, human_takeover, last_inbound_at
+      `SELECT phone, channel, human_takeover, last_inbound_at
        FROM contacts
        WHERE phone = $1`,
       [phone],
@@ -81,20 +86,13 @@ class PgTx implements HelloTx {
   async saveContact(contact: Contact): Promise<void> {
     await this.client.query(
       `INSERT INTO contacts (
-         phone, channel, mistral_conversation_id, human_takeover, last_inbound_at
-       ) VALUES ($1, $2, $3, $4, $5)
+         phone, channel, human_takeover, last_inbound_at
+       ) VALUES ($1, $2, $3, $4)
        ON CONFLICT (phone) DO UPDATE SET
          channel = EXCLUDED.channel,
-         mistral_conversation_id = EXCLUDED.mistral_conversation_id,
          human_takeover = EXCLUDED.human_takeover,
          last_inbound_at = EXCLUDED.last_inbound_at`,
-      [
-        contact.phone,
-        contact.channel,
-        contact.mistralConversationId,
-        contact.humanTakeover,
-        contact.lastInboundAt,
-      ],
+      [contact.phone, contact.channel, contact.humanTakeover, contact.lastInboundAt],
     );
   }
 
@@ -129,6 +127,47 @@ class PgTx implements HelloTx {
         lead.notes,
       ],
     );
+  }
+
+  async listMessages(phone: string, limit: number): Promise<HistoryMessage[]> {
+    if (limit < 1) return [];
+    const result = await this.client.query<MessageRow>(
+      `SELECT role, parts
+       FROM (
+         SELECT id, role, parts, created_at
+         FROM messages
+         WHERE phone = $1
+         ORDER BY created_at DESC, id DESC
+         LIMIT $2
+       ) AS recent
+       ORDER BY created_at ASC, id ASC`,
+      [phone, limit],
+    );
+    return result.rows.map(mapMessage);
+  }
+
+  async hasMessages(phone: string): Promise<boolean> {
+    const result = await this.client.query(`SELECT 1 FROM messages WHERE phone = $1 LIMIT 1`, [
+      phone,
+    ]);
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async appendMessages(phone: string, messages: HistoryMessage[]): Promise<void> {
+    for (const message of messages) {
+      if (message.role !== "user" && message.role !== "model") {
+        throw new Error(`unexpected message role ${message.role}`);
+      }
+      if (!Array.isArray(message.parts)) throw new Error("message parts must be an array");
+      await this.client.query(
+        `INSERT INTO messages (phone, role, parts) VALUES ($1, $2, $3::jsonb)`,
+        [phone, message.role, JSON.stringify(message.parts)],
+      );
+    }
+  }
+
+  async clearMessages(phone: string): Promise<void> {
+    await this.client.query(`DELETE FROM messages WHERE phone = $1`, [phone]);
   }
 }
 
@@ -181,10 +220,18 @@ function mapContact(row: ContactRow): Contact {
   return {
     phone: row.phone,
     channel: row.channel,
-    mistralConversationId: row.mistral_conversation_id,
     humanTakeover: row.human_takeover,
     lastInboundAt: row.last_inbound_at ? row.last_inbound_at.toISOString() : null,
   };
+}
+
+function mapMessage(row: MessageRow): HistoryMessage {
+  if (row.role !== "user" && row.role !== "model") {
+    throw new Error(`unexpected message role ${row.role}`);
+  }
+  const parts = typeof row.parts === "string" ? parseJson(row.parts) : row.parts;
+  if (!Array.isArray(parts)) throw new Error("message parts were not a JSON array");
+  return { role: row.role, parts };
 }
 
 function mapLead(row: LeadRow): Lead {

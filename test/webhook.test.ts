@@ -22,7 +22,7 @@ class FakeWhatsApp implements ChannelAdapter {
   }
 }
 
-async function setup(agent = new FakeAgent(() => textResponse("conv_1", "Which dates matter?"))) {
+async function setup(agent = new FakeAgent(() => textResponse("Which dates matter?"))) {
   const store = new MemoryStore();
   const whatsapp = new FakeWhatsApp();
   const app = await buildApp({
@@ -70,7 +70,7 @@ describe("webhook and health routes", () => {
       config: testConfig,
       store: new MemoryStore({ ping: async () => Promise.reject(new Error("db down")) }),
       channels: new ChannelRegistry([]),
-      agent: new FakeAgent(() => textResponse("conv", "hi")),
+      agent: new FakeAgent(() => textResponse("hi")),
       logger: false,
     });
     const down = await failing.inject({ method: "GET", url: "/ready" });
@@ -97,14 +97,14 @@ describe("webhook and health routes", () => {
     await app.close();
   });
 
-  it("acks 200 before Mistral returns, then sends with the event idempotency key", async () => {
+  it("acks 200 before Gemini returns, then sends with the event idempotency key", async () => {
     let release: (() => void) | undefined;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
     const agent = new FakeAgent(async () => {
       await gate;
-      return textResponse("conv_1", "Which dates matter?");
+      return textResponse("Which dates matter?");
     });
     const { app, whatsapp } = await setup(agent);
     const request = signed(inboundBody);
@@ -134,7 +134,7 @@ describe("webhook and health routes", () => {
     });
     const agent = new FakeAgent(async () => {
       await gate;
-      return textResponse("conv_1", "Which dates matter?");
+      return textResponse("Which dates matter?");
     });
     const { app, whatsapp } = await setup(agent);
     const request = signed(inboundBody);
@@ -268,7 +268,7 @@ describe("webhook and health routes", () => {
   it("executes a handoff tool from the webhook path", async () => {
     const agent = new FakeAgent((request, call) => {
       if (call === 1) {
-        return callResponse("conv_1", [
+        return callResponse([
           {
             toolCallId: "hand",
             name: "handoff_to_team",
@@ -276,7 +276,7 @@ describe("webhook and health routes", () => {
           },
         ]);
       }
-      return textResponse("conv_2", "The team has this.");
+      return textResponse("The team has this.");
     });
     const { app, store, whatsapp } = await setup(agent);
     const request = signed({
