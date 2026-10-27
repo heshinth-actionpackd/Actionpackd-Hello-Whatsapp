@@ -1,10 +1,4 @@
-const OPENING_CHOICES = [
-  "Business Agents",
-  "Media Agents",
-  "Reminder Bot",
-  "Follow-Up Bot",
-  "Talk to the team",
-] as const;
+import { openingChoices } from "./copy.js";
 
 const RESET = new Set(["start over", "restart", "menu"]);
 
@@ -35,14 +29,14 @@ export function isGreeting(text: string): boolean {
 }
 
 /**
- * A bare "1" to "5" answers the opening menu. Only use this when this phone
- * has no stored history yet, so a later numbered list stays the model's to read.
+ * A bare number answers the opening menu. Only use this when this phone has
+ * no stored history yet, so a later numbered list stays the model's to read.
  */
 export function openingChoice(text: string): string | null {
-  const match = /^\s*([1-5])\s*[.)]?\s*$/.exec(text);
+  const match = /^\s*(\d+)\s*[.)]?\s*$/.exec(text);
   const digit = match?.[1];
   if (!digit) return null;
-  return OPENING_CHOICES[Number(digit) - 1] ?? null;
+  return openingChoices()[Number(digit) - 1] ?? null;
 }
 
 /**

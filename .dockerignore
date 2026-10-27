@@ -7,3 +7,4 @@ coverage
 *.log
 *.md
 !agent/instructions.md
+!agent/skills/**

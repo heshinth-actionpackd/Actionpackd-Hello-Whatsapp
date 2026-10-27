@@ -31,6 +31,7 @@ src/db/schema.ts                 Drizzle tables
 src/db/                          pool, Drizzle queries, migrator
 drizzle/                         generated migrations
 agent/instructions.md            system instruction, loaded at startup
+agent/skills/replies.md          welcome, menu, and canned replies
 ```
 
 Tables live in `src/db/schema.ts`. Startup applies the generated files in `drizzle/`. Change the schema, then run `npm run db:generate`.
@@ -40,7 +41,7 @@ Tables live in `src/db/schema.ts`. Startup applies the generated files in `drizz
 - Node.js 22 LTS (the Docker image is `node:22-bookworm-slim`)
 - Postgres 14 or newer (the compose file runs 16)
 - An Actionpackd API key, and a Gemini API key from [Google AI Studio](https://aistudio.google.com/apikey)
-- `agent/instructions.md` in place. The server exits on startup if that file is missing, and answers with the fallback text if Gemini errors
+- `agent/instructions.md` and `agent/skills/replies.md` in place. The server exits on startup if either file is missing, and answers with the fallback text if Gemini errors
 
 ## Setup
 
@@ -64,7 +65,7 @@ Apply migrations without starting the server with `npm run migrate`. Submit the 
 
 ## Google Gemini
 
-Replies come from the Gemini API. There is no hosted agent to configure. On startup the server reads [`agent/instructions.md`](agent/instructions.md) and sends it as `systemInstruction` on every request, along with the three function declarations in `src/conversation/tools.ts` (`save_lead`, `handoff_to_team`, `start_over`). The server runs those functions itself and sends the results back. Fill the two TODO blocks under Knowledge before you rely on prices or the safety answer. Until those still say TODO, the prompt tells the model to hand that question to the team. Restart after you edit the file.
+Replies come from the Gemini API. There is no hosted agent to configure. On startup the server reads [`agent/instructions.md`](agent/instructions.md), appends the menu from [`agent/skills/replies.md`](agent/skills/replies.md), and sends that as `systemInstruction` on every request, along with the three function declarations in `src/conversation/tools.ts` (`save_lead`, `handoff_to_team`, `start_over`). The server runs those functions itself and sends the results back. Welcome text, the numbered menu, the error and quota lines, and the team messages are the other sections of that same replies file. Fill the two TODO blocks under Knowledge before you rely on prices or the safety answer. Until those still say TODO, the prompt tells the model to hand that question to the team. Restart after you edit either file. A change to `# menu_template` or `# team_alert_template` still needs `npm run templates` and Meta approval before WhatsApp will send the new template.
 
 1. Create a free API key at <https://aistudio.google.com/apikey> and put it in `GEMINI_API_KEY`.
 2. Leave `GEMINI_MODEL` at the default, `gemini-3.5-flash-lite`. That is the stable model id in the [Gemini 3.5 Flash Lite docs](https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite) (function calling is supported). On the AI Studio free tier, Flash Lite models are 15 requests per minute, 500 requests per day, and 250,000 tokens per minute. Regular Flash models on that same free tier are 5 requests per minute and 20 requests per day.

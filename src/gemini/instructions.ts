@@ -1,8 +1,12 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { MENU_TEXT } from "../conversation/copy.js";
 
-/** `agent/instructions.md` from either `src/gemini` or `dist/gemini`. */
+/**
+ * `agent/instructions.md` plus the menu from `agent/skills/replies.md`.
+ * Works from either `src/gemini` or `dist/gemini`.
+ */
 export function loadSystemInstruction(): string {
   const path = join(dirname(fileURLToPath(import.meta.url)), "../../agent/instructions.md");
   let text: string;
@@ -14,5 +18,5 @@ export function loadSystemInstruction(): string {
   }
   const trimmed = text.trim();
   if (!trimmed) throw new Error(`agent/instructions.md at ${path} is empty`);
-  return trimmed;
+  return `${trimmed}\n\n## Menu\n\nSend this menu as written when they have not picked a topic, when you greet them, and after a restart.\n\n${MENU_TEXT}`;
 }

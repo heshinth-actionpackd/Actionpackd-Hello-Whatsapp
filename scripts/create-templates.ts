@@ -1,49 +1,35 @@
 import "dotenv/config";
+import {
+  MENU_TEMPLATE_BODY,
+  openingChoices,
+  TEAM_ALERT_TEMPLATE_BODY,
+} from "../src/conversation/copy.js";
 
 /**
- * Submits the two Hello templates. Reads ACTIONPACKD_API_KEY from .env.
- * `body` must be a string. A top-level `buttons` array is stored as Meta
- * QUICK_REPLY buttons. A `components` array on this request is ignored.
+ * Submits the two Hello templates. Reads ACTIONPACKD_API_KEY from .env and
+ * the wording from agent/skills/replies.md. `body` must be a string. A
+ * top-level `buttons` array is stored as Meta QUICK_REPLY buttons. A
+ * `components` array on this request is ignored.
  */
-const quickReplies = [
-  "Business Agents",
-  "Media Agents",
-  "Reminder Bot",
-  "Follow-Up Bot",
-  "Talk to the team",
-].map((text) => ({ type: "QUICK_REPLY" as const, text }));
+const quickReplies = openingChoices().map((text) => ({ type: "QUICK_REPLY" as const, text }));
 
 const templates = [
   {
     name: "hello_menu",
     category: "UTILITY",
-    body: [
-      "Hand us the jobs that keep slipping.",
-      "",
-      "Business Agents answer enquiries, book appointments and chase payments. Media Agents turn one photo into posters, videos and voiceovers. Reminder Bot and Follow-Up Bot keep dates and quiet chats from slipping.",
-      "",
-      "Pick one and I'll take it from there.",
-    ].join("\n"),
+    body: MENU_TEMPLATE_BODY,
     buttons: quickReplies,
   },
   {
     name: "hello_team_alert",
     category: "UTILITY",
-    body: [
-      "New Actionpackd Hello handoff.",
-      "",
-      "Customer WhatsApp: {{1}}",
-      "",
-      "{{2}}",
-      "",
-      "To let the bot reply again, send BOT ON {{1}} from this chat.",
-    ].join("\n"),
+    body: TEAM_ALERT_TEMPLATE_BODY,
     bodyExamples: [
       "919876543210",
       "Priya runs a B2C bakery and wants the Follow-Up Bot. She has a WhatsApp Business number.",
     ],
   },
-] as const;
+];
 
 const key = process.env.ACTIONPACKD_API_KEY?.trim();
 if (!key) {
