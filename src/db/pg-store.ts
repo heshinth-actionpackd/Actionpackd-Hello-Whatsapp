@@ -1,3 +1,6 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { and, asc, desc, eq, isNotNull, sql } from "drizzle-orm";
+import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { Pool, PoolClient } from "pg";
 import type { HistoryMessage } from "../conversation/history.js";
 import {
@@ -5,227 +8,233 @@ import {
   type ChannelId,
   type Contact,
   type Delivery,
+  type InboundMessage,
   type Lead,
   type Reply,
   type StoredEvent,
 } from "../domain.js";
 import type { BeginEventResult, HelloStore, HelloTx } from "../store.js";
+import * as schema from "./schema.js";
+import { contacts, leads, messages, processedEvents } from "./schema.js";
 
-interface ContactRow {
-  phone: string;
-  channel: string;
-  human_takeover: boolean;
-  last_inbound_at: Date | null;
-}
+type Database = NodePgDatabase<typeof schema>;
+type Tx = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
-interface LeadRow {
-  phone: string;
-  name: string | null;
-  business_type: string | null;
-  need: string | null;
-  has_whatsapp_business_number: boolean | null;
-  notes: string | null;
-}
-
-interface EventRow {
-  event_id: string;
-  channel: string;
-  status: string;
-  deliveries: unknown;
-}
-
-interface MessageRow {
-  role: string;
-  parts: unknown;
+function database(client: Pool | PoolClient): Database {
+  return drizzle(client, { schema });
 }
 
 class PgTx implements HelloTx {
-  constructor(private readonly client: PoolClient) {}
+  constructor(private readonly tx: Tx) {}
 
-  async beginEvent(eventId: string, channel: ChannelId): Promise<BeginEventResult> {
-    const inserted = await this.client.query<{ event_id: string }>(
-      `INSERT INTO processed_events (event_id, channel, status, deliveries)
-       VALUES ($1, $2, 'processing', '[]'::jsonb)
-       ON CONFLICT (event_id) DO NOTHING
-       RETURNING event_id`,
-      [eventId, channel],
-    );
-    if ((inserted.rowCount ?? 0) > 0) return { status: "new" };
+  async beginEvent(
+    eventId: string,
+    channel: ChannelId,
+    inbound?: InboundMessage,
+  ): Promise<BeginEventResult> {
+    const inserted = await this.tx
+      .insert(processedEvents)
+      .values({
+        eventId,
+        channel,
+        status: "processing",
+        deliveries: [],
+        payload: inbound ?? null,
+      })
+      .onConflictDoNothing()
+      .returning({ eventId: processedEvents.eventId });
+    if (inserted.length > 0) return { status: "new" };
 
-    const existing = await this.client.query<EventRow>(
-      `SELECT event_id, channel, status, deliveries
-       FROM processed_events
-       WHERE event_id = $1`,
-      [eventId],
-    );
-    const row = existing.rows[0];
-    if (!row) {
-      throw new Error(`processed event ${eventId} disappeared during claim`);
-    }
+    const existing = await this.tx
+      .select()
+      .from(processedEvents)
+      .where(eq(processedEvents.eventId, eventId));
+    const row = existing[0];
+    if (!row) throw new Error(`processed event ${eventId} disappeared during claim`);
     return { status: "existing", event: mapEvent(row) };
   }
 
   async saveEventDeliveries(eventId: string, deliveries: Delivery[]): Promise<void> {
-    await this.client.query(
-      `UPDATE processed_events SET deliveries = $2::jsonb WHERE event_id = $1`,
-      [eventId, JSON.stringify(deliveries)],
-    );
+    await this.tx
+      .update(processedEvents)
+      .set({ deliveries })
+      .where(eq(processedEvents.eventId, eventId));
   }
 
   async getContact(phone: string): Promise<Contact | null> {
-    const result = await this.client.query<ContactRow>(
-      `SELECT phone, channel, human_takeover, last_inbound_at
-       FROM contacts
-       WHERE phone = $1`,
-      [phone],
-    );
-    const row = result.rows[0];
+    const rows = await this.tx.select().from(contacts).where(eq(contacts.phone, phone));
+    const row = rows[0];
     return row ? mapContact(row) : null;
   }
 
   async saveContact(contact: Contact): Promise<void> {
-    await this.client.query(
-      `INSERT INTO contacts (
-         phone, channel, human_takeover, last_inbound_at
-       ) VALUES ($1, $2, $3, $4)
-       ON CONFLICT (phone) DO UPDATE SET
-         channel = EXCLUDED.channel,
-         human_takeover = EXCLUDED.human_takeover,
-         last_inbound_at = EXCLUDED.last_inbound_at`,
-      [contact.phone, contact.channel, contact.humanTakeover, contact.lastInboundAt],
-    );
+    const values = {
+      phone: contact.phone,
+      channel: contact.channel,
+      humanTakeover: contact.humanTakeover,
+      lastInboundAt: contact.lastInboundAt ? new Date(contact.lastInboundAt) : null,
+    };
+    await this.tx
+      .insert(contacts)
+      .values(values)
+      .onConflictDoUpdate({
+        target: contacts.phone,
+        set: {
+          channel: values.channel,
+          humanTakeover: values.humanTakeover,
+          lastInboundAt: values.lastInboundAt,
+          updatedAt: new Date(),
+        },
+      });
   }
 
   async getLead(phone: string): Promise<Lead | null> {
-    const result = await this.client.query<LeadRow>(
-      `SELECT phone, name, business_type, need, has_whatsapp_business_number, notes
-       FROM leads
-       WHERE phone = $1`,
-      [phone],
-    );
-    const row = result.rows[0];
+    const rows = await this.tx.select().from(leads).where(eq(leads.phone, phone));
+    const row = rows[0];
     return row ? mapLead(row) : null;
   }
 
   async saveLead(lead: Lead): Promise<void> {
-    await this.client.query(
-      `INSERT INTO leads (
-         phone, name, business_type, need, has_whatsapp_business_number, notes
-       ) VALUES ($1, $2, $3, $4, $5, $6)
-       ON CONFLICT (phone) DO UPDATE SET
-         name = EXCLUDED.name,
-         business_type = EXCLUDED.business_type,
-         need = EXCLUDED.need,
-         has_whatsapp_business_number = EXCLUDED.has_whatsapp_business_number,
-         notes = EXCLUDED.notes`,
-      [
-        lead.phone,
-        lead.name,
-        lead.businessType,
-        lead.need,
-        lead.hasWhatsappBusinessNumber,
-        lead.notes,
-      ],
-    );
+    const values = {
+      phone: lead.phone,
+      name: lead.name,
+      businessType: lead.businessType,
+      need: lead.need,
+      hasWhatsappBusinessNumber: lead.hasWhatsappBusinessNumber,
+      notes: lead.notes,
+    };
+    await this.tx
+      .insert(leads)
+      .values(values)
+      .onConflictDoUpdate({
+        target: leads.phone,
+        set: { ...values, updatedAt: new Date() },
+      });
   }
 
   async listMessages(phone: string, limit: number): Promise<HistoryMessage[]> {
     if (limit < 1) return [];
-    const result = await this.client.query<MessageRow>(
-      `SELECT role, parts
-       FROM (
-         SELECT id, role, parts, created_at
-         FROM messages
-         WHERE phone = $1
-         ORDER BY created_at DESC, id DESC
-         LIMIT $2
-       ) AS recent
-       ORDER BY created_at ASC, id ASC`,
-      [phone, limit],
-    );
-    return result.rows.map(mapMessage);
+    const rows = await this.tx
+      .select({ role: messages.role, parts: messages.parts })
+      .from(messages)
+      .where(eq(messages.phone, phone))
+      .orderBy(desc(messages.createdAt), desc(messages.id))
+      .limit(limit);
+    return rows.reverse().map(mapMessage);
   }
 
   async hasMessages(phone: string): Promise<boolean> {
-    const result = await this.client.query(`SELECT 1 FROM messages WHERE phone = $1 LIMIT 1`, [
-      phone,
-    ]);
-    return (result.rowCount ?? 0) > 0;
+    const rows = await this.tx
+      .select({ id: messages.id })
+      .from(messages)
+      .where(eq(messages.phone, phone))
+      .limit(1);
+    return rows.length > 0;
   }
 
-  async appendMessages(phone: string, messages: HistoryMessage[]): Promise<void> {
-    for (const message of messages) {
-      if (message.role !== "user" && message.role !== "model") {
-        throw new Error(`unexpected message role ${message.role}`);
-      }
-      if (!Array.isArray(message.parts)) throw new Error("message parts must be an array");
-      await this.client.query(
-        `INSERT INTO messages (phone, role, parts) VALUES ($1, $2, $3::jsonb)`,
-        [phone, message.role, JSON.stringify(message.parts)],
-      );
-    }
+  async appendMessages(phone: string, history: HistoryMessage[]): Promise<void> {
+    if (history.length === 0) return;
+    await this.tx.insert(messages).values(
+      history.map((message) => {
+        if (message.role !== "user" && message.role !== "model") {
+          throw new Error(`unexpected message role ${message.role}`);
+        }
+        if (!Array.isArray(message.parts)) throw new Error("message parts must be an array");
+        return { phone, role: message.role, parts: message.parts };
+      }),
+    );
   }
 
   async clearMessages(phone: string): Promise<void> {
-    await this.client.query(`DELETE FROM messages WHERE phone = $1`, [phone]);
+    await this.tx.delete(messages).where(eq(messages.phone, phone));
   }
 }
+
+const turnConnection = new AsyncLocalStorage<PoolClient>();
 
 export function createPgStore(pool: Pool): HelloStore {
   return {
     async lock(phone, fn) {
       const client = await pool.connect();
       const key = `contact:${phone}`;
+      const db = database(client);
       try {
-        await client.query("SELECT pg_advisory_lock(hashtext($1)::bigint)", [key]);
-        return await fn();
+        await db.execute(sql`select pg_advisory_lock(hashtext(${key})::bigint)`);
+        return await turnConnection.run(client, fn);
       } finally {
         try {
-          await client.query("SELECT pg_advisory_unlock(hashtext($1)::bigint)", [key]);
+          await db.execute(sql`select pg_advisory_unlock(hashtext(${key})::bigint)`);
         } finally {
           client.release();
         }
       }
     },
     async transact(fn) {
+      const bound = turnConnection.getStore();
+      if (bound) return database(bound).transaction((tx) => fn(new PgTx(tx)));
       const client = await pool.connect();
       try {
-        await client.query("BEGIN");
-        const value = await fn(new PgTx(client));
-        await client.query("COMMIT");
-        return value;
-      } catch (error) {
-        await client.query("ROLLBACK");
-        throw error;
+        return await database(client).transaction((tx) => fn(new PgTx(tx)));
       } finally {
         client.release();
       }
     },
     async markEventProcessed(eventId) {
-      await pool.query(
-        `UPDATE processed_events
-         SET status = 'processed', processed_at = now()
-         WHERE event_id = $1`,
-        [eventId],
-      );
+      const db = database(turnConnection.getStore() ?? pool);
+      await db
+        .update(processedEvents)
+        .set({ status: "processed", processedAt: new Date() })
+        .where(eq(processedEvents.eventId, eventId));
+    },
+    async listInterrupted() {
+      const rows = await database(pool)
+        .select({ payload: processedEvents.payload })
+        .from(processedEvents)
+        .where(and(eq(processedEvents.status, "processing"), isNotNull(processedEvents.payload)))
+        .orderBy(asc(processedEvents.createdAt));
+      const found: InboundMessage[] = [];
+      for (const row of rows) {
+        const message = inboundFromPayload(row.payload);
+        if (message) found.push(message);
+      }
+      return found;
     },
     async ping() {
-      await pool.query("SELECT 1");
+      await database(pool).execute(sql`select 1`);
     },
   };
 }
 
-function mapContact(row: ContactRow): Contact {
+/** Reads the JSON saved on `processed_events.payload`. */
+export function inboundFromPayload(value: unknown): InboundMessage | null {
+  const parsed = typeof value === "string" ? parseJson(value) : value;
+  if (!isRecord(parsed)) return null;
+  if (typeof parsed.eventId !== "string" || typeof parsed.channelUserId !== "string") return null;
+  if (typeof parsed.channel !== "string" || !isChannelId(parsed.channel)) return null;
+  if (parsed.phone !== null && typeof parsed.phone !== "string") return null;
+  if (parsed.text !== null && typeof parsed.text !== "string") return null;
+  if (parsed.buttonId !== null && typeof parsed.buttonId !== "string") return null;
+  return {
+    channel: parsed.channel,
+    eventId: parsed.eventId,
+    channelUserId: parsed.channelUserId,
+    phone: parsed.phone ?? null,
+    text: parsed.text ?? null,
+    buttonId: parsed.buttonId ?? null,
+  };
+}
+
+function mapContact(row: typeof contacts.$inferSelect): Contact {
   if (!isChannelId(row.channel)) throw new Error(`unexpected channel ${row.channel}`);
   return {
     phone: row.phone,
     channel: row.channel,
-    humanTakeover: row.human_takeover,
-    lastInboundAt: row.last_inbound_at ? row.last_inbound_at.toISOString() : null,
+    humanTakeover: row.humanTakeover,
+    lastInboundAt: row.lastInboundAt ? row.lastInboundAt.toISOString() : null,
   };
 }
 
-function mapMessage(row: MessageRow): HistoryMessage {
+function mapMessage(row: { role: string; parts: unknown }): HistoryMessage {
   if (row.role !== "user" && row.role !== "model") {
     throw new Error(`unexpected message role ${row.role}`);
   }
@@ -234,24 +243,24 @@ function mapMessage(row: MessageRow): HistoryMessage {
   return { role: row.role, parts };
 }
 
-function mapLead(row: LeadRow): Lead {
+function mapLead(row: typeof leads.$inferSelect): Lead {
   return {
     phone: row.phone,
     name: row.name,
-    businessType: row.business_type,
+    businessType: row.businessType,
     need: row.need,
-    hasWhatsappBusinessNumber: row.has_whatsapp_business_number,
+    hasWhatsappBusinessNumber: row.hasWhatsappBusinessNumber,
     notes: row.notes,
   };
 }
 
-function mapEvent(row: EventRow): StoredEvent {
+function mapEvent(row: typeof processedEvents.$inferSelect): StoredEvent {
   if (!isChannelId(row.channel)) throw new Error(`unexpected channel ${row.channel}`);
   if (row.status !== "processing" && row.status !== "processed") {
     throw new Error(`unexpected event status ${row.status}`);
   }
   return {
-    eventId: row.event_id,
+    eventId: row.eventId,
     channel: row.channel,
     status: row.status,
     deliveries: parseDeliveries(row.deliveries),

@@ -2,18 +2,12 @@ import type { Reply } from "../domain.js";
 import { MENU_TEXT, teamAlertText } from "./copy.js";
 
 /**
- * Approved WhatsApp template names sent through Actionpackd.
+ * Template names submitted by `scripts/create-templates.ts`. A rejected send
+ * falls back to plain text, and the event stays retryable if that text send
+ * also fails.
  *
- * TODO: replace these with the names that are APPROVED on the Actionpackd
- * number. Until then, a rejected template send falls back to plain text and
- * the event stays retryable only if that text send also fails.
- *
- * Quick-reply buttons are part of the approved template. They are not sent
- * on the API request. For TODO_hello_menu the button text and the payload
- * should both be the label (Business Agents, Media Agents, Reminder Bot,
- * Follow-Up Bot, Talk to the team) so a button tap reaches the agent as that text.
- *
- * TODO_hello_team_alert has two body variables, in order: customer phone, summary.
+ * Quick replies are stored on `hello_menu`. A tap arrives as that label.
+ * `hello_team_alert` has two body variables, in order: customer phone, summary.
  */
 export const TEMPLATE_NAMES = {
   menu: "hello_menu",

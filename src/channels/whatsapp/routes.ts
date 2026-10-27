@@ -7,7 +7,7 @@ import type { InFlight } from "../../inflight.js";
 import type { Log } from "../../log.js";
 import type { AgentClient } from "../../agent/types.js";
 import type { HelloStore } from "../../store.js";
-import { ActionpackdError } from "./client.js";
+import { ActionpackdError, actionpackdErrorCode } from "./client.js";
 import { parseActionpackdWebhook } from "./parse.js";
 import { verifyActionpackdSignature } from "./signature.js";
 
@@ -81,18 +81,22 @@ export function registerWhatsappWebhook(
           log,
         }),
     ).catch((error: unknown) => {
-      if (error instanceof ActionpackdError && error.status === 409) {
-        log.error(
-          { err: error, eventId: message.eventId, body: error.body },
-          "send rejected; text outside the 24 hour window returns SESSION_WINDOW_CLOSED",
-        );
-        return;
-      }
-      log.error({ err: error, eventId: message.eventId }, "inbound turn failed");
+      logTurnFailure(error, log, message.eventId);
     });
     deps.inFlight.track(job);
     return reply.code(200).send({ ok: true });
   });
+}
+
+export function logTurnFailure(error: unknown, log: Log, eventId: string): void {
+  if (error instanceof ActionpackdError && error.status === 409) {
+    log.error(
+      { err: error, eventId, body: error.body, code: actionpackdErrorCode(error.body) },
+      "send rejected",
+    );
+    return;
+  }
+  log.error({ err: error, eventId }, "inbound turn failed");
 }
 
 function bindLog(log: FastifyBaseLogger): Log {

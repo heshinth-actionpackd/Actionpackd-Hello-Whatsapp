@@ -13,7 +13,7 @@ ENV NODE_ENV=production
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/dist ./dist
-COPY migrations ./migrations
+COPY drizzle ./drizzle
 COPY agent/instructions.md ./agent/instructions.md
 USER node
 EXPOSE 3000

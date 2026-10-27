@@ -48,12 +48,12 @@ describe("Actionpackd send client", () => {
     await client.sendMessage({
       to: "919876543210",
       idempotencyKey: "evt_1:0",
-      reply: { kind: "template", templateName: "TODO_hello_menu", language: "en" },
+      reply: { kind: "template", templateName: "hello_menu", language: "en" },
     });
     expect(body).toEqual({
       to: "919876543210",
       type: "template",
-      template: { name: "TODO_hello_menu", language: "en" },
+      template: { name: "hello_menu", language: "en" },
     });
   });
 
@@ -73,7 +73,7 @@ describe("Actionpackd send client", () => {
       idempotencyKey: "evt_1:1",
       reply: {
         kind: "template",
-        templateName: "TODO_hello_team_alert",
+        templateName: "hello_team_alert",
         language: "en",
         bodyParams: ["919876543210", "Bakery wants the Follow-Up Bot"],
       },
@@ -82,7 +82,7 @@ describe("Actionpackd send client", () => {
       to: "919800000000",
       type: "template",
       template: {
-        name: "TODO_hello_team_alert",
+        name: "hello_team_alert",
         language: "en",
         components: [
           {

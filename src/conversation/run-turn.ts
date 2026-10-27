@@ -39,7 +39,7 @@ export async function acceptInbound(
   message: InboundMessage,
 ): Promise<"process" | "done"> {
   return store.transact(async (tx) => {
-    const begun = await tx.beginEvent(message.eventId, message.channel);
+    const begun = await tx.beginEvent(message.eventId, message.channel, message);
     if (begun.status === "existing" && begun.event.status === "processed") return "done";
     return "process";
   });
@@ -59,7 +59,7 @@ export async function runTurn(
   const log = deps.log ?? silentLog;
   await deps.store.lock(phone, async () => {
     const begun = await deps.store.transact((tx) =>
-      tx.beginEvent(message.eventId, message.channel),
+      tx.beginEvent(message.eventId, message.channel, message),
     );
     if (begun.status === "existing" && begun.event.status === "processed") return;
     if (begun.status === "existing" && begun.event.deliveries.length > 0) {

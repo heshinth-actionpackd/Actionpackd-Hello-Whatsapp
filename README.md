@@ -8,8 +8,8 @@ Messaging goes through the [Actionpackd Messaging API](https://dev.actionpackd.c
 
 1. `POST /webhooks/actionpackd` checks the signature and parses the inbound message.
 2. The event id is claimed in `processed_events`. A duplicate that already finished is ignored. If the database claim fails, the route returns 500 so Actionpackd can retry.
-3. The route answers **200** and keeps working after the response. Gemini is too slow to hold the webhook open.
-4. The turn takes a per-phone lock, calls the agent (or a local command), stores the reply, then sends it.
+3. The route answers **200** and keeps working after the response. Gemini is too slow to hold the webhook open. The claimed row stores the inbound message. On startup, rows still `processing` are run again.
+4. The turn takes a per-phone lock on the same database connection it uses for queries, calls the agent (or a local command), stores the reply, then sends it.
 5. Sends use `Idempotency-Key` `{eventId}:{index}`. If a send throws, the event stays `processing` and the next delivery of that event resends the same payloads. It does not call Gemini again.
 
 A greeting with no stored history yet (`hi`, `hello`, `hey`, `good morning`, `good afternoon`, `good evening`) sends the menu template and does not call Gemini. A reply of `1` through `5` while there is still no history is read as that line of the opening menu (Business Agents, Media Agents, Reminder Bot, Follow-Up Bot, Talk to the team). Any other first message starts a conversation. `start over`, `restart`, and `menu` delete that phone's history and send the menu again.
@@ -27,13 +27,13 @@ src/conversation/agent-loop.ts   Gemini turn, tool calls, fallback text
 src/conversation/tools.ts        save_lead, handoff_to_team, start_over
 src/gemini/                      AgentClient adapter for @google/genai
 src/channels/whatsapp/           signature, parser, Actionpackd client, route
-src/db/                          pg pool, SQL migration runner, queries
-migrations/001_init.sql          contacts, leads, processed_events
-migrations/002_messages.sql      chat history; drops mistral_conversation_id
+src/db/schema.ts                 Drizzle tables
+src/db/                          pool, Drizzle queries, migrator
+drizzle/                         generated migrations
 agent/instructions.md            system instruction, loaded at startup
 ```
 
-Postgres access is `pg` plus numbered SQL files. There is no ORM. Applied files are recorded in `schema_migrations`.
+Tables live in `src/db/schema.ts`. Startup applies the generated files in `drizzle/`. Change the schema, then run `npm run db:generate`.
 
 ## Prerequisites
 
@@ -76,11 +76,11 @@ Gemini does not store the chat. Each request replays about the last 20 user turn
 
 ## Templates to approve
 
-Submit both in the Actionpackd / Meta template flow before those steps can deliver the template itself. Language code used in the API is `en`. Match that to the language you submit. Quick replies are part of the approved template. They are not sent on the API request.
+Submit both in the Actionpackd / Meta template flow before those steps can deliver the template itself. Language code used in the API is `en`. Match that to the language you submit. Quick replies belong to the approved template. `npm run templates` sends them as a `buttons` array. A send does not repeat them.
 
 Until a template is approved, a rejected send is logged as `template send failed; sending text instead` and the same message is sent as plain text (which only works inside the 24-hour window).
 
-### `TODO_hello_menu`
+### `hello_menu`
 
 Utility or marketing, whichever Meta accepts for a menu the customer just opened. No body variables. Suggested body:
 
@@ -102,13 +102,11 @@ Five quick-reply buttons. Set **both** the button label and the payload to the e
 | Follow-Up Bot    | Follow-Up Bot    |
 | Talk to the team | Talk to the team |
 
-Each label is under WhatsApp's 25-character button limit. Confirm the approval form allows five quick replies (templates allow up to 10 buttons). Plans and price, safety, and "share my requirements" are not buttons. The agent offers them in text when they fit.
+Each label is under WhatsApp's 25-character button limit. Confirm the approval form allows five quick replies (templates allow up to 10 buttons). Plans and price, safety, and "share my requirements" are not buttons. The agent offers them in text when they fit. `npm run templates` submits these labels as a `buttons` array. The send request does not repeat them.
 
-Replace the name `TODO_hello_menu` in `src/conversation/templates.ts` with the approved name.
+### `hello_team_alert`
 
-### `TODO_hello_team_alert`
-
-Utility. Two body variables, in order: customer phone, summary. Suggested body (the variable is not the first or last character of the template):
+Utility. Two body variables, in order: customer phone, summary. The body must have real text after the last variable:
 
 ```
 New Actionpackd Hello handoff.
@@ -117,7 +115,7 @@ Customer WhatsApp: {{1}}
 
 {{2}}
 
-Send this to let the bot reply again: BOT ON {{1}}.
+To let the bot reply again, send BOT ON {{1}} from this chat.
 ```
 
 Sample values: `919876543210` and `Priya runs a B2C bakery and wants the Follow-Up Bot. She has a WhatsApp Business number.`
@@ -134,7 +132,7 @@ Priya runs a B2C bakery and wants the Follow-Up Bot.
 Send this to let the bot reply again: BOT ON 919876543210.
 ```
 
-Replace `TODO_hello_team_alert` in `src/conversation/templates.ts` once the name is approved.
+`npm run templates` submits this body with those two sample values. The names in `src/conversation/templates.ts` are `hello_menu` and `hello_team_alert`.
 
 ## Environment
 
@@ -235,7 +233,7 @@ The header is expected to be hex. A `sha256=` prefix and base64 are also accepte
   "to": "919800000000",
   "type": "template",
   "template": {
-    "name": "TODO_hello_team_alert",
+    "name": "hello_team_alert",
     "language": "en",
     "components": [
       {
@@ -277,7 +275,7 @@ Photos, voice notes, and other non-text messages get a short note asking for tex
 
 ## Tables
 
-`contacts.phone` is the WhatsApp sender, digits only. `human_takeover` stops the bot. `last_inbound_at` is updated on each customer message. Migration `002_messages.sql` drops `mistral_conversation_id` from the original contacts table.
+`contacts.phone` is the WhatsApp sender, digits only. `human_takeover` stops the bot. `last_inbound_at` is updated on each customer message.
 
 `leads` is one row per phone: `name`, `business_type`, `need`, `has_whatsapp_business_number`, `notes`.
 
@@ -299,4 +297,4 @@ Checked against the Gemini API docs (function calling, thought signatures, and t
 
 ## What this demo does not do
 
-It does not download WhatsApp media, take payment, or quote a price. Pricing and the safety answer belong in the Knowledge section of `agent/instructions.md`. Adding Telegram means a new adapter and a migration that widens the `channel` check constraint. The core already talks to an `AgentClient` and a `ChannelAdapter` rather than to WhatsApp or Gemini directly.
+It does not download WhatsApp media, take payment, or quote a price. Pricing and the safety answer belong in the Knowledge section of `agent/instructions.md`.

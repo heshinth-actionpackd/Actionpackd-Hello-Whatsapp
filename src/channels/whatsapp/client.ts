@@ -1,5 +1,18 @@
 import type { Reply } from "../../domain.js";
 
+export function actionpackdErrorCode(body: string): string | null {
+  try {
+    const parsed = JSON.parse(body) as unknown;
+    if (typeof parsed === "object" && parsed !== null && "code" in parsed) {
+      const code = parsed.code;
+      if (typeof code === "string") return code;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 export class ActionpackdError extends Error {
   constructor(
     message: string,

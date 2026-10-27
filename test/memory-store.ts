@@ -1,5 +1,13 @@
 import type { HistoryMessage } from "../src/conversation/history.js";
-import type { ChannelId, Contact, Delivery, Lead, Reply, StoredEvent } from "../src/domain.js";
+import type {
+  ChannelId,
+  Contact,
+  Delivery,
+  InboundMessage,
+  Lead,
+  Reply,
+  StoredEvent,
+} from "../src/domain.js";
 import type { BeginEventResult, HelloStore, HelloTx } from "../src/store.js";
 
 interface StoredMessage {
@@ -11,6 +19,7 @@ interface Snapshot {
   contacts: Map<string, Contact>;
   leads: Map<string, Lead>;
   events: Map<string, StoredEvent>;
+  payloads: Map<string, InboundMessage>;
   messages: StoredMessage[];
   contactWrites: number;
 }
@@ -20,6 +29,7 @@ export class MemoryStore implements HelloStore, HelloTx {
   contacts = new Map<string, Contact>();
   leads = new Map<string, Lead>();
   events = new Map<string, StoredEvent>();
+  payloads = new Map<string, InboundMessage>();
   messages: StoredMessage[] = [];
   contactWrites = 0;
   /** When set, the next transact() throws once. Used to simulate a database outage. */
@@ -65,11 +75,24 @@ export class MemoryStore implements HelloStore, HelloTx {
     }
   }
 
-  async beginEvent(eventId: string, channel: ChannelId): Promise<BeginEventResult> {
+  async beginEvent(
+    eventId: string,
+    channel: ChannelId,
+    inbound?: InboundMessage,
+  ): Promise<BeginEventResult> {
     const existing = this.events.get(eventId);
     if (existing) return { status: "existing", event: cloneEvent(existing) };
     this.events.set(eventId, { eventId, channel, status: "processing", deliveries: [] });
+    if (inbound) this.payloads.set(eventId, { ...inbound });
     return { status: "new" };
+  }
+
+  async listInterrupted(): Promise<InboundMessage[]> {
+    const found: InboundMessage[] = [];
+    for (const [eventId, inbound] of this.payloads) {
+      if (this.events.get(eventId)?.status === "processing") found.push({ ...inbound });
+    }
+    return found;
   }
 
   async saveEventDeliveries(eventId: string, deliveries: Delivery[]): Promise<void> {
@@ -135,6 +158,7 @@ export class MemoryStore implements HelloStore, HelloTx {
       contacts: new Map([...this.contacts].map(([key, contact]) => [key, { ...contact }])),
       leads: new Map([...this.leads].map(([key, lead]) => [key, { ...lead }])),
       events: new Map([...this.events].map(([key, event]) => [key, cloneEvent(event)])),
+      payloads: new Map([...this.payloads].map(([key, inbound]) => [key, { ...inbound }])),
       messages: this.messages.map((row) => ({
         phone: row.phone,
         message: cloneMessage(row.message),
@@ -147,6 +171,7 @@ export class MemoryStore implements HelloStore, HelloTx {
     this.contacts = snapshot.contacts;
     this.leads = snapshot.leads;
     this.events = snapshot.events;
+    this.payloads = snapshot.payloads;
     this.messages = snapshot.messages;
     this.contactWrites = snapshot.contactWrites;
   }

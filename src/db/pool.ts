@@ -41,6 +41,8 @@ export function createPool(config: AppConfig): pg.Pool {
   return new pg.Pool({
     connectionString: options.connectionString,
     max: 10,
+    // Fail instead of waiting forever when every connection is already in a turn.
+    connectionTimeoutMillis: 10_000,
     ssl: options.ssl,
   });
 }
