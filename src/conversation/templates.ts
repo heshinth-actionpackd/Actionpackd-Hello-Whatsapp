@@ -16,8 +16,8 @@ import { MENU_TEXT, teamAlertText } from "./copy.js";
  * TODO_hello_team_alert has two body variables, in order: customer phone, summary.
  */
 export const TEMPLATE_NAMES = {
-  menu: "TODO_hello_menu",
-  teamAlert: "TODO_hello_team_alert",
+  menu: "hello_menu",
+  teamAlert: "hello_team_alert",
 } as const;
 
 const TEMPLATE_LANGUAGE = "en";

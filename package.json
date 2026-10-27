@@ -16,7 +16,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
-    "migrate": "tsx src/db/migrate.ts"
+    "migrate": "tsx src/db/migrate.ts",
+    "templates": "tsx scripts/create-templates.ts"
   },
   "dependencies": {
     "@google/genai": "2.31.0",

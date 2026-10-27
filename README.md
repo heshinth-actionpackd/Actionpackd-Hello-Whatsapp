@@ -60,7 +60,7 @@ curl -s localhost:3000/ready
 
 `/health` is process liveness and does not touch Postgres. `/ready` runs `SELECT 1`. Point Railway's healthcheck at `/health`.
 
-Apply migrations without starting the server with `npm run migrate`.
+Apply migrations without starting the server with `npm run migrate`. Submit the two WhatsApp templates with `npm run templates` (live key in `.env`). The menu request includes a `buttons` array, which Actionpackd stores as quick replies. After both are `APPROVED`, replace the names in `src/conversation/templates.ts`.
 
 ## Google Gemini
 
@@ -167,6 +167,7 @@ npm run format:check
 npm run typecheck
 npm run build     # tsc to dist/
 npm start         # node dist/index.js
+npm run templates # submit hello_menu and hello_team_alert; needs apk_live_ in .env
 ```
 
 ## Docker and Railway
